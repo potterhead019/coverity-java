@@ -1,0 +1,104 @@
+# Coverity Scan GitHub Actions Workflow
+# This workflow runs Coverity static analysis on the Java codebase
+
+name: Coverity Scan
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  schedule:
+    # Run weekly on Sundays at midnight UTC
+    - cron: '0 0 * * 0'
+  workflow_dispatch:  # Allow manual trigger
+
+env:
+  COVERITY_PROJECT: coverity-java-demo
+  JAVA_VERSION: '17'
+
+jobs:
+  coverity-scan:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for better analysis
+
+      - name: Set up JDK ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: 'temurin'
+          cache: 'maven'
+
+      - name: Cache Coverity tools
+        uses: actions/cache@v4
+        with:
+          path: ~/coverity-tools
+          key: coverity-tools-${{ runner.os }}
+
+      - name: Download Coverity Build Tool
+        run: |
+          mkdir -p ~/coverity-tools
+          if [ ! -f ~/coverity-tools/cov-analysis/bin/cov-build ]; then
+            echo "Downloading Coverity Build Tool..."
+            curl -o ~/coverity-tools/coverity.tar.gz \
+              --form token=${{ secrets.COVERITY_TOKEN }} \
+              --form project=${{ env.COVERITY_PROJECT }} \
+              https://scan.coverity.com/download/java/linux64
+            tar -xzf ~/coverity-tools/coverity.tar.gz -C ~/coverity-tools
+            mv ~/coverity-tools/cov-analysis-* ~/coverity-tools/cov-analysis
+          fi
+
+      - name: Build with Maven
+        run: mvn clean compile -DskipTests
+
+      - name: Run Coverity Build
+        run: |
+          export PATH=$PATH:~/coverity-tools/cov-analysis/bin
+          cov-build --dir cov-int mvn clean compile -DskipTests
+
+      - name: Submit Coverity Scan
+        run: |
+          tar czvf coverity-scan.tar.gz cov-int
+          curl --form token=${{ secrets.COVERITY_TOKEN }} \
+               --form email=${{ secrets.COVERITY_EMAIL }} \
+               --form file=@coverity-scan.tar.gz \
+               --form version="${{ github.sha }}" \
+               --form description="GitHub Actions Build - ${{ github.ref_name }}" \
+               https://scan.coverity.com/builds?project=${{ env.COVERITY_PROJECT }}
+
+      - name: Upload Coverity intermediate directory
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverity-intermediate
+          path: cov-int/
+          retention-days: 7
+
+  # Alternative: Local analysis for PR feedback
+  local-analysis:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: 'temurin'
+          cache: 'maven'
+
+      - name: Build and run basic checks
+        run: |
+          mvn clean verify -B
+          
+      - name: Run SpotBugs for quick feedback
+        run: |
+          mvn spotbugs:check -B || true
