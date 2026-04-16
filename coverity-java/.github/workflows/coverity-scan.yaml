@@ -14,7 +14,7 @@ on:
   workflow_dispatch:  # Allow manual trigger
 
 env:
-  COVERITY_PROJECT: coverity-java-demo
+  COVERITY_PROJECT: potterhead019/coverity-java
   JAVA_VERSION: '17'
 
 jobs:
